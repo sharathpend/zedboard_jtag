@@ -131,14 +131,14 @@ set_property PACKAGE_PIN AB11 [get_ports {trst}];  # "JA7"
 #set_property PACKAGE_PIN U6 [get_ports {JD4_P}];  # "JD4_P"
 
 # ----------------------------------------------------------------------------
-# OLED Display - Bank 13
+# OLED Display - Bank 13 (https://cdn-shop.adafruit.com/datasheets/UG-2832HSWEG04.pdf)
 # ---------------------------------------------------------------------------- 
-#set_property PACKAGE_PIN U10  [get_ports {OLED_DC}];  # "OLED-DC"
-#set_property PACKAGE_PIN U9   [get_ports {OLED_RES}];  # "OLED-RES"
-#set_property PACKAGE_PIN AB12 [get_ports {OLED_SCLK}];  # "OLED-SCLK"
-#set_property PACKAGE_PIN AA12 [get_ports {OLED_SDIN}];  # "OLED-SDIN"
-#set_property PACKAGE_PIN U11  [get_ports {OLED_VBAT}];  # "OLED-VBAT"
-#set_property PACKAGE_PIN U12  [get_ports {OLED_VDD}];  # "OLED-VDD"
+#set_property PACKAGE_PIN U10  [get_ports {OLED_DC}];  # "OLED-DC" Data(1)/Command(0)
+#set_property PACKAGE_PIN U9   [get_ports {OLED_RES}];  # "OLED-RES" Reset (reset_n)
+#set_property PACKAGE_PIN AB12 [get_ports {OLED_SCLK}];  # "OLED-SCLK" Serial Clock
+#set_property PACKAGE_PIN AA12 [get_ports {OLED_SDIN}];  # "OLED-SDIN" Serial Data (posedge latched, MSB first, 8b)
+#set_property PACKAGE_PIN U11  [get_ports {OLED_VBAT}];  # "OLED-VBAT" (Power supply of internal buffer of DC/DC convrt.)
+#set_property PACKAGE_PIN U12  [get_ports {OLED_VDD}];  # "OLED-VDD" Voltage supply pin
 
 # ----------------------------------------------------------------------------
 # HDMI Output - Bank 33
