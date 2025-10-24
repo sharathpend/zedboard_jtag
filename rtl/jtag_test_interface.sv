@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------------
-// Digital Test Interface between WISP and JTAG TAP
+// Digital Test Interface between User Design and JTAG TAP
 // -----------------------------------------------------------------------------
 //
 // This module provides a JTAG-accessible test interface for the digital core.
@@ -7,21 +7,9 @@
 // The interface includes a configuration register (TCR) that controls muxes
 // and debug paths, and a shift register for JTAG data movement. The TCR is
 // only updated on JTAG UPDATE_DR, so muxes are stable during shifting.
-//
-// At this point this *assumes* that the WISP will have some sort of resistive
-// pullup connected to the master JTAG trst (reset pin) which is active high.
-// If the WISP sees that the trst has been pulled low it will use the tr_ctrl
-// pins of the test_interface to determine how to handle clocking and routing
-// of the data to and from the testregister.
 // -----------------------------------------------------------------------------
 
 `timescale 1ns/1ps
-
-`define JTAGOFF        32'd0
-`define SOURCEDEMOD    5'b11000
-`define SINKDEMOD      5'b10010
-`define SOURCEMODOUT   5'b10001
-`define SINKMODOUT     5'b10100
 
 module jtag_test_interface #(
     parameter CONRLEN = 32,      // JTAG configuration register length
@@ -41,19 +29,20 @@ module jtag_test_interface #(
 
     // JTAG chain outputs
     output wire debug_tdi_o,          // Debug chain
-    output reg  bs_chain_tdi_o,       // Boundary scan chain
+    output reg  bs_chain_tdi_o = 0,   // Boundary scan chain
     output wire mbist_tdi_o,          // MBIST chain
 
     input  wire chiptdi,              // The tap's tdo_o pin (connects to tdi_pad_i)
-    output wire tdo2,                 // Secondary TDO (for test/debug)
 
     // -------------------------------------------------------------------------
-    // Encoder/Decoder Interface Ports
+    // JTAG MUX Interface Ports (Connected to User Design)
     // -------------------------------------------------------------------------
-    input  wire txbitout_in,          // Input from encoder
-    output wire txbitout_out,         // Muxed output to Analog Modulator
-    input  wire txbitouten_in,        // Input from encoder
-    output wire txbitouten_out,       // Muxed output to Analog Modulator
+    input  wire sel_1_in_1,
+    input  wire sel_1_in_2,
+    input  wire sel_1_out,
+    input  wire sel_2_in_1,
+    input  wire sel_2_in_2,
+    input  wire sel_2_out,
 
     // -------------------------------------------------------------------------
     // JTAG Instruction Select
@@ -66,19 +55,16 @@ module jtag_test_interface #(
     // -------------------------------------------------------------------------
     // Control Register and Test Data Ports
     // -------------------------------------------------------------------------
-    output wire [CONRLEN-1:0] tcr_out,        // Output of the test control register
-    input  wire chipreset,                    // Chip-level reset signal for config reg
-    input  wire [TRCAL_SIZE-1:0] trcal_tr_in, // Input for trcal shift register
-    output reg  [TRCAL_SIZE-1:0] trcal_tr_out,// Output for trcal shift register
-    input  wire NFC_demod_in,                 // Input from analog receiver
-    output wire used_demodin                  // Muxed output to decoder
+    output wire [CONRLEN-1:0] tcr_out,            // Output of the test control register
+    input  wire [TRCAL_SIZE-1:0] trcal_tr_in,     // Input for trcal shift register
+    output reg  [TRCAL_SIZE-1:0] trcal_tr_out = 0 // Output for trcal shift register
 );
 
 // -----------------------------------------------------------------------------
 // Internal Registers
 // -----------------------------------------------------------------------------
-reg [CONRLEN-1:0] tcr;        // Latched config register (used for muxes)
-reg [CONRLEN-1:0] tcr_shift;  // Shift register (for JTAG shifting)
+reg [CONRLEN-1:0] tcr = 0; // Latched config register (used for muxes)
+reg [CONRLEN-1:0] tcr_shift = {CONRLEN{1'b1}};  // Shift register (for JTAG shifting)
 
 // -----------------------------------------------------------------------------
 // Mux Logic (TCR controls muxes)
@@ -87,20 +73,15 @@ reg [CONRLEN-1:0] tcr_shift;  // Shift register (for JTAG shifting)
 // from the muxes. Only the latched TCR register is used for mux selection, so
 // shifting does not cause glitches.
 
-// If enabled, drive the source from external TDI; otherwise, use NFC_demod_in.
-assign used_demodin = ((tcr[CONRLEN-10] && tcr[0]) == 1'b1) ? chiptdi : NFC_demod_in;
+// If enabled, drive the sel_1_out from sel_1_in_2; otherwise, use sel_1_in_1.
+assign sel_1_out = ((tcr[CONRLEN-10] && tcr[0]) == 1'b1) ? sel_1_in_2 : sel_1_in_1;
 
-// If enabled, drive chiptdi to analog mod (digital output); otherwise, use txbitout_in.
-assign txbitout_out = ((tcr[CONRLEN-10] && tcr[1]) == 1'b1) ? chiptdi : txbitout_in;
+// If enabled, drive the sel_2_out from sel_2_in_2; otherwise, use sel_2_in_1.
+assign sel_2_out = ((tcr[CONRLEN-10] && tcr[1]) == 1'b1) ? sel_2_in_2 : sel_2_in_1;
 
-// If enabled, drive output enable high; otherwise, use txbitouten_in.
-assign txbitouten_out = ((tcr[CONRLEN-10] && tcr[3]) == 1'b1) ? 1'b1 : txbitouten_in;
-
-// Secondary TDO for test/debug.
-assign tdo2 = txbitout_out;
-
-// If enabled, drive used_demodin (decoder input) to debug_tdi_o; otherwise, 0.
-assign debug_tdi_o = ((tcr[CONRLEN-10] && tcr[2]) == 1'b1) ? used_demodin : 1'b0;
+// If enabled, drive sel_1_out to debug_tdi_o; otherwise, 0. To observe is sle_1_out
+// is getting selected correctly.
+assign debug_tdi_o = ((tcr[CONRLEN-10] && tcr[2]) == 1'b1) ? sel_1_out : 1'b0;
 
 // Boundary scan and MBIST TDI outputs are currently unused, so just set them to 0.
 assign mbist_tdi_o = 1'b0;
@@ -114,27 +95,27 @@ assign mbist_tdi_o = 1'b0;
 
 always @(posedge tclk or posedge test_logic_reset_i) begin
     if (test_logic_reset_i) begin
-        trcal_tr_out <= #1 {TRCAL_SIZE{1'b0}}; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
+        trcal_tr_out <= 0; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
         // trcal_tr_out <= #1 ~tcr;
     end else begin
         // EXTEST CAPTURE/UPDATE EXAMPLE
         if (extest_sel & shift_dr_i) begin
-            trcal_tr_out[TRCAL_SIZE-1] <= #1 chiptdi;
-            trcal_tr_out[TRCAL_SIZE-2:0] <= #1 trcal_tr_out[TRCAL_SIZE-1:1];
+            trcal_tr_out[TRCAL_SIZE-1] <= chiptdi;
+            trcal_tr_out[TRCAL_SIZE-2:0] <= trcal_tr_out[TRCAL_SIZE-1:1];
         end
         if (extest_sel & capture_dr_i) begin
-            trcal_tr_out <= #1 trcal_tr_in; // Read out the current state to be shifted to the JTAG
+            trcal_tr_out <= trcal_tr_in; // Read out the current state to be shifted to the JTAG
         end
     end
 end
 
 always @(negedge tclk or posedge test_logic_reset_i) begin
     if (test_logic_reset_i) begin
-        bs_chain_tdi_o <= #1 1'b0;
+        bs_chain_tdi_o <= 1'b0;
     end else if (extest_sel) begin
-        bs_chain_tdi_o <= #1 trcal_tr_out[0];
+        bs_chain_tdi_o <= trcal_tr_out[0];
     end else if (sample_preload_sel) begin
-        bs_chain_tdi_o <= #1 tcr_shift[0];
+        bs_chain_tdi_o <= tcr_shift[0];
     end
 end
 
@@ -146,22 +127,22 @@ end
 
 always @(posedge tclk or posedge test_logic_reset_i) begin
     if (test_logic_reset_i) begin
-        tcr <= #1 {CONRLEN{1'b0}}; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
-        tcr_shift <= #1 ~tcr;
+        tcr <= {CONRLEN{1'b0}}; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
+        tcr_shift <= ~tcr;
     end else begin
         // SAMPLE PRELOAD CAPTURE/UPDATE EXAMPLE
         if (sample_preload_sel & shift_dr_i) begin
-            tcr_shift[CONRLEN-1] <= #1 chiptdi;
-            tcr_shift[CONRLEN-2:0] <= #1 tcr_shift[CONRLEN-1:1];
+            tcr_shift[CONRLEN-1] <= chiptdi;
+            tcr_shift[CONRLEN-2:0] <= tcr_shift[CONRLEN-1:1];
         end
         if (sample_preload_sel & capture_dr_i) begin
-            tcr_shift <= #1 tcr; // Read out the current state to be shifted to the JTAG
+            tcr_shift <= tcr; // Read out the current state to be shifted to the JTAG
         end
         if (sample_preload_sel & update_dr_i) begin
             // Only update tcr if MSB (bit 31) is set (write operation)
             // On read (MSB == 0), tcr is not updated and remains unchanged
             if (tcr_shift[CONRLEN-1])
-                tcr <= #1 {1'b0, tcr_shift[CONRLEN-2:0]}; // Mask out MSB so it does not affect mux logic
+                tcr <= {1'b0, tcr_shift[CONRLEN-2:0]}; // Mask out MSB so it does not affect mux logic
             // else: do nothing (read operation)
         end
     end

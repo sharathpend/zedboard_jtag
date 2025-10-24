@@ -89,7 +89,7 @@ set_property PACKAGE_PIN AA11 [get_ports {tms}];  # "JA2"
 set_property PACKAGE_PIN Y10  [get_ports {tdi}];  # "JA3"
 set_property PACKAGE_PIN AA9  [get_ports {tdo}];  # "JA4"
 set_property PACKAGE_PIN AB11 [get_ports {trst}];  # "JA7"
-#set_property PACKAGE_PIN AB10 [get_ports {JA8}];  # "JA8"
+set_property PACKAGE_PIN AB10 [get_ports {clk_div_o}];  # "JA8"
 #set_property PACKAGE_PIN AB9  [get_ports {JA9}];  # "JA9"
 #set_property PACKAGE_PIN AA8  [get_ports {JA10}];  # "JA10"
 

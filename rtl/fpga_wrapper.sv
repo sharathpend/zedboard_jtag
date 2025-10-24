@@ -3,21 +3,23 @@
 //=====================================================
 
 
-
 module fpga_wrapper (
-  // Clock
+  // Clock and clock_enable (enable controlled via switch)
   input  wire clk_in, // GCLK, 100MHz
   input  wire clk_en, // SW0
 
-  // Simple JTAG Interface
+  // JTAG Interface
   input  wire tck,  // JA1
   input  wire tms,  // JA2
   input  wire tdi,  // JA3
   output wire tdo,  // JA4
   input  wire trst, // JA7
 
-  // Simple LED power ON
-  output wire led_0 // LD0
+  // LED toggle
+  output wire led_0, // LD0
+
+  // Divided clock output (maybe to external scope), selected via JTAG
+  output wire clk_div_o // JA8
 );
 
   localparam CLOCK_PERIOD = 10; // ns
@@ -26,29 +28,47 @@ module fpga_wrapper (
   localparam CONRLEN = 32; // JTAG config reg size
   localparam TRCAL_SIZE = 32; // JTAG shift reg size
 
+  // Simple divided clock output, selected via JTAG to test its functionality.
+  localparam CLK_DIV_1 = 10; // How much to divide the clock and send outside to observe.
+  localparam CLK_DIV_2 = 20; // How much to divide the clock and send outside to observe.
+  localparam CLK_DIV_1_BITS = $clog2(CLK_DIV_1);
+  localparam CLK_DIV_2_BITS = $clog2(CLK_DIV_2);
+
   wire clk;
+  reg  clk_div_1 = 0;
+  reg  clk_div_2 = 0;
+  reg  [CLK_DIV_1_BITS-1:0] clk_div_1_counter = 0;
+  reg  [CLK_DIV_2_BITS-1:0] clk_div_2_counter = 0;
 
   // LED toggle
-  reg [BITS_REQUIRED-1:0] clk_blink_counter = 0;
-  reg [31:0] num_toggles = 0;
-  reg led_0_d = 0;
+  reg  [BITS_REQUIRED-1:0] clk_blink_counter = 0;
+  reg  [1:0] led_blink_speed_1 = 1;
+  reg  [1:0] led_blink_speed_2 = 2;
+  wire [1:0] led_blink_speed; // selected via JTAG
+  reg  [CONRLEN-1:0] num_toggles = 0;
+  reg  led_0_d = 0;
 
   // JTAG
+  wire tdoen;
+  wire test_logic_reset;
   wire shift_dr;
   wire pause_dr;
   wire update_dr;
   wire capture_dr;
-  reg  capture_dr_d;
-
+  reg  capture_dr_d = 0;
   wire extest_sel;
   wire sample_preload_sel;
   wire mbist_sel;
   wire debug_sel;
-
+  wire tdi_debug;
+  wire tdi_boundary_scan;
+  wire tdi_bist;
   wire [CONRLEN-1:0] tcr; // JTAG control register
-  reg  [TRCAL_SIZE-1:0] trcal_reg; // JTAG shift register
+  reg  [TRCAL_SIZE-1:0] trcal_reg = 0; // JTAG shift register
+  reg  [TRCAL_SIZE-1:0] trcal_reg_in = {TRCAL_SIZE{1'b1}}; // Input from JTAG Shift Reg (write into User Design from JTAG)
   wire [TRCAL_SIZE-1:0] trcal_in;
   wire [TRCAL_SIZE-1:0] trcal_out;
+
 
   BUFGCE BUFGCE_clk_inst (
     .O  (clk),    // 1-bit output: Clock output
@@ -56,9 +76,24 @@ module fpga_wrapper (
     .I  (clk_in)  // 1-bit input: Primary clock
   );
 
+  // counters to generate clk_div_1 and clk_div_2
+  always@ (posedge clk) begin
+    if (clk_div_1_counter == CLK_DIV_1-1) begin
+      clk_div_1 <= ~clk_div_1;
+      clk_div_1_counter <= 0;
+    end else
+      clk_div_1_counter <= clk_div_1_counter + 1'b1;
+    
+    if (clk_div_2_counter == CLK_DIV_2-1) begin
+      clk_div_2 <= ~clk_div_2;
+      clk_div_2_counter <= 0;
+    end else
+      clk_div_2_counter <= clk_div_2_counter + 1'b1;
+  end
+
   // counter to toggle LED
   always@ (posedge clk) begin
-    clk_blink_counter <= clk_blink_counter + 1'b1;
+    clk_blink_counter <= clk_blink_counter + led_blink_speed;
   end
 
   assign led_0 = clk_blink_counter[BITS_REQUIRED-1];
@@ -71,60 +106,34 @@ module fpga_wrapper (
     end
   end
 
+
   // JTAG Shift Register (trcal_reg)
+  // MSB 8 bits of tcr are for selecting various registers to load on JTAG Shift Register for EXTEST
+  // tcr[(CONRLEN-9)] is used to select between write (1) and read (0) in cases where write is allowed
   always@ (posedge clk) begin
-    casex(tcr[(CONRLEN-1) -: 8]) // MSB 8 bits are for selecting various registers to load on JTAG Shift Register for EXTEST??
-      8'h0: begin
-        trcal_reg <= 128'h0;
+    casex(tcr[(CONRLEN-1) -: 8])
+      8'h0: begin // Default value for EXTEST DEBUG 
+        trcal_reg <= 0;
       end
-      8'h1: begin
-        trcal_reg <= {fdt_bias_control_reg_o, uart_status_reg_1_o, bit_period_status_reg_1_o, ac_control_reg};
+      8'h1: begin // Dummy value for EXTEST DEBUG
+        trcal_reg <= 'hDEAD_BEEF;
       end
-      8'h2: begin
-        trcal_reg <= {ac_status_reg_1_o, ac_status_reg_2_o, decoder_status_reg_1_o, state_machine_status_reg_1_o};
+      8'h2: begin // Example of reading a value from User Design
+        trcal_reg <= num_toggles;
       end
-      8'h3: begin
+      8'h3: begin // Write/Read operation example
         if (update_dr && extest_sel && tcr[(CONRLEN-9)]) begin // write
-            trcal_reg <= trcal_out;
-        end else if (capture_dr && extest_sel) begin // read (this might be too late, as the same condition is used inside test_interface, added capture_dr_d)
-            trcal_reg <= {fdt_bias_control_reg_o, uart_status_reg_1_o, bit_period_status_reg_1_o, ac_control_reg};
+          trcal_reg_in <= trcal_out;
+        end else if (capture_dr && extest_sel) begin // read
+          trcal_reg <= trcal_reg_in;
         end
       end
-      8'h4: begin
-        if (update_dr && extest_sel && tcr[(CONRLEN-9)]) begin // write
-            trcal_reg <= trcal_out;
-        end else if (capture_dr && extest_sel) begin // read (this might be too late, as the same condition is used inside test_interface, added capture_dr_d)
-            trcal_reg <= {ac_status_reg_1_o, ac_status_reg_2_o, decoder_status_reg_1_o, state_machine_status_reg_1_o};
-        end
-      end
-      8'h8: begin // When addr is 8, update_dr will force trcal_reg to update
-        if (update_dr && extest_sel) begin
-            trcal_reg <= trcal_out;
-        end
-        load_bias_jtag <= ~trcal_reg[0];
-        bias_logic_1_jtag <= trcal_reg[15:8];
-        bias_logic_0_jtag <= trcal_reg[23:16];
-        uart_prescale_jtag <= trcal_reg[47:32];
-      end
-      8'h9: begin // When addr is 9, program some important MUX
-        if (update_dr && extest_sel) begin
-            trcal_reg <= trcal_out;
-        end
-        clk_select_jtag <= trcal_reg[0];
-        rst_select_jtag <= trcal_reg[8];
-        ac_control_reg <= trcal_reg[63:32];
-        UID_backup_wire_i_debug_jtag <= trcal_reg[95:64];
-        UID_source_selector_i_debug_jtag <= trcal_reg[96];
-        UID_mem_addr_selector_i_debug_jtag <= trcal_reg[101:100];
-      end
-      8'd15: begin
-        trcal_reg <= 128'hDEAD_BEEF_DEAD_BEEF_DEAD_BEEF_DEAD_BEEF; // Dummy value for EXTEST DEBUG
-      end
-      default: begin
-        trcal_reg <= 128'h0;
+      default: begin // Dummy value for EXTEST DEBUG
+        trcal_reg <= 'hBEEF_BEEF;
       end
     endcase
   end
+
   assign trcal_in = trcal_reg;
 
   // JTAG modules
@@ -170,7 +179,7 @@ module fpga_wrapper (
   jtag_test_interface #(
       .CONRLEN            (CONRLEN), // JTAG configuration register length
       .TRCAL_SIZE         (TRCAL_SIZE) // JTAG shift register size
-  ) test_interface_inst (			   
+  ) jtag_test_interface_inst (			   
       .tclk               (tck),  // JTAG test clock pad
       .test_logic_reset_i (test_logic_reset), 
       
@@ -185,16 +194,13 @@ module fpga_wrapper (
       .mbist_tdi_o         (tdi_bist),
 
       .chiptdi             (chiptdi),
-      .tdo2                (tdo2),
 
-      .txbitout_in         (real_encoder_output), // input from encoder
-      .txbitout_out        (encoded_bit_o_analog), // muxed output to Analog Modulator (after debug interface), select between encoded_bit and chiptdi
-      
-      .txbitouten_in       (real_encoder_enable), // input from encoder
-      .txbitouten_out      (output_enable_o_analog), // muxed output to Analog Modulator (after debug interface), select between encoded_bit and chiptdi
-      
-      .NFC_demod_in        (analog_output_i_analog), // input from analog receiver
-      .used_demodin        (analog_demod_in), // muxed output to Decoder (through debug interface), select between analog_output_i_analog and chiptdi
+      .sel_1_in_1          (clk_div_1),
+      .sel_1_in_2          (clk_div_2),
+      .sel_1_out           (clk_div_o),
+      .sel_2_in_1          (led_blink_speed_1),
+      .sel_2_in_2          (led_blink_speed_2),
+      .sel_2_out           (led_blink_speed),
 
       // These tell what instruction is currently loaded (from jtag_tap)
       .extest_sel          (extest_sel),
@@ -203,14 +209,14 @@ module fpga_wrapper (
       .debug_sel           (debug_sel),
 
       // Control Reg
-      // Upper 8 bits are used for MUX in data into JTAG Shift Register trcal_in. Other bits could be used for MUX for tdo
-      // Bit (CONRLEN-9) is used to select between read and then write to the JTAG Shift Register (1), or just read from it (0).
+      // Upper 8 bits are used for MUX in data into JTAG Shift Register trcal_in.
+      // Other bits could be used for MUX for tdo
+      // Bit (CONRLEN-9) is used to select between read and then write to the JTAG
+      // Shift Register (1), or just read from it (0).
       .tcr_out                    (tcr),
 
-      .chipreset                  (rst), // unused
-
       // JTAG Shift Register
-      .trcal_tr_in                (trcal_in), // I think this is the register that is used to store the data you want to send out/receive through JTAG
+      .trcal_tr_in                (trcal_in), // the data you want to send out/receive through JTAG
       .trcal_tr_out               (trcal_out)
 
   );
