@@ -95,27 +95,27 @@ assign mbist_tdi_o = 1'b0;
 
 always @(posedge tclk or posedge test_logic_reset_i) begin
     if (test_logic_reset_i) begin
-        trcal_tr_out <= 0; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
+        trcal_tr_out <= #1 0; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
         // trcal_tr_out <= #1 ~tcr;
     end else begin
         // EXTEST CAPTURE/UPDATE EXAMPLE
         if (extest_sel & shift_dr_i) begin
-            trcal_tr_out[TRCAL_SIZE-1] <= chiptdi;
-            trcal_tr_out[TRCAL_SIZE-2:0] <= trcal_tr_out[TRCAL_SIZE-1:1];
+            trcal_tr_out[TRCAL_SIZE-1] <= #1 chiptdi;
+            trcal_tr_out[TRCAL_SIZE-2:0] <= #1 trcal_tr_out[TRCAL_SIZE-1:1];
         end
         if (extest_sel & capture_dr_i) begin
-            trcal_tr_out <= trcal_tr_in; // Read out the current state to be shifted to the JTAG
+            trcal_tr_out <= #1 trcal_tr_in; // Read out the current state to be shifted to the JTAG
         end
     end
 end
 
 always @(negedge tclk or posedge test_logic_reset_i) begin
     if (test_logic_reset_i) begin
-        bs_chain_tdi_o <= 1'b0;
+        bs_chain_tdi_o <= #1 1'b0;
     end else if (extest_sel) begin
-        bs_chain_tdi_o <= trcal_tr_out[0];
+        bs_chain_tdi_o <= #1 trcal_tr_out[0];
     end else if (sample_preload_sel) begin
-        bs_chain_tdi_o <= tcr_shift[0];
+        bs_chain_tdi_o <= #1 tcr_shift[0];
     end
 end
 
@@ -127,22 +127,22 @@ end
 
 always @(posedge tclk or posedge test_logic_reset_i) begin
     if (test_logic_reset_i) begin
-        tcr <= {CONRLEN{1'b0}}; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
-        tcr_shift <= ~tcr;
+        tcr <= #1 {CONRLEN{1'b0}}; // Default state. If JTAG is not powered, use PU/PD resistors at mux for default state.
+        tcr_shift <= #1 ~tcr;
     end else begin
         // SAMPLE PRELOAD CAPTURE/UPDATE EXAMPLE
         if (sample_preload_sel & shift_dr_i) begin
-            tcr_shift[CONRLEN-1] <= chiptdi;
-            tcr_shift[CONRLEN-2:0] <= tcr_shift[CONRLEN-1:1];
+            tcr_shift[CONRLEN-1] <= #1 chiptdi;
+            tcr_shift[CONRLEN-2:0] <= #1 tcr_shift[CONRLEN-1:1];
         end
         if (sample_preload_sel & capture_dr_i) begin
-            tcr_shift <= tcr; // Read out the current state to be shifted to the JTAG
+            tcr_shift <= #1 tcr; // Read out the current state to be shifted to the JTAG
         end
         if (sample_preload_sel & update_dr_i) begin
             // Only update tcr if MSB (bit 31) is set (write operation)
             // On read (MSB == 0), tcr is not updated and remains unchanged
             if (tcr_shift[CONRLEN-1])
-                tcr <= {1'b0, tcr_shift[CONRLEN-2:0]}; // Mask out MSB so it does not affect mux logic
+                tcr <= #1 {1'b0, tcr_shift[CONRLEN-2:0]}; // Mask out MSB so it does not affect mux logic
             // else: do nothing (read operation)
         end
     end

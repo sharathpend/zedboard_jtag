@@ -137,25 +137,35 @@ module jtag_tap (
   output reg  tdo_padoe_o,    // Output enable for JTAG test data output pad 
 
   // TAP states
-  output  wire shift_dr_o,
-  output  wire pause_dr_o,
-  output  wire update_dr_o,
-  output  wire capture_dr_o,
-  output  wire test_logic_reset_o,
+  output wire shift_dr_o,
+  output wire pause_dr_o,
+  output wire update_dr_o,
+  output wire capture_dr_o,
+  output wire test_logic_reset_o,
 
   // Select signals for boundary scan or mbist
-  output  wire extest_select_o,
-  output  wire sample_preload_select_o,
-  output  wire mbist_select_o,
-  output  wire debug_select_o,
+  output wire extest_select_o,
+  output wire sample_preload_select_o,
+  output wire mbist_select_o,
+  output wire debug_select_o,
 
   // TDO signal that is connected to TDI of sub-modules.
-  output  wire tdo_o,
+  output wire tdo_o,
 
   // TDI signals from sub-modules
-  input   wire debug_tdi_i,    // from debug module
-  input   wire bs_chain_tdi_i, // from Boundary Scan Chain
-  input   wire mbist_tdi_i     // from Mbist Chain
+  input  wire debug_tdi_i,    // from debug module
+  input  wire bs_chain_tdi_i, // from Boundary Scan Chain
+  input  wire mbist_tdi_i,    // from Mbist Chain
+
+  // ILA Debug
+  output wire [3:0] ila_latched_jtag_ir,
+  output wire       ila_extest_select,
+  output wire       ila_sample_preload_select,
+  output wire       ila_idcode_select,
+  output wire       ila_mbist_select,
+  output wire       ila_debug_select,
+  output wire       ila_feedthru_select,
+  output wire       ila_bypass_select
 );
 
   // Registers
@@ -547,7 +557,15 @@ module jtag_tap (
     endcase
   end
 
-
+  
+  assign ila_latched_jtag_ir = latched_jtag_ir;
+  assign ila_extest_select = extest_select;
+  assign ila_sample_preload_select = sample_preload_select;
+  assign ila_idcode_select = idcode_select;
+  assign ila_mbist_select = mbist_select;
+  assign ila_debug_select = debug_select;
+  assign ila_feedthru_select = feedthru_select;
+  assign ila_bypass_select = bypass_select;
 
   // *   Multiplexing TDO data
 

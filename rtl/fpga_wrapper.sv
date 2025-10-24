@@ -34,11 +34,16 @@ module fpga_wrapper (
   localparam CLK_DIV_1_BITS = $clog2(CLK_DIV_1);
   localparam CLK_DIV_2_BITS = $clog2(CLK_DIV_2);
 
-  wire clk;
+  wire clk; // target 100MHz
+  wire clk_ila; // target 10MHz, to scan a 1MHz JTAG
   reg  clk_div_1 = 0;
   reg  clk_div_2 = 0;
   reg  [CLK_DIV_1_BITS-1:0] clk_div_1_counter = 0;
   reg  [CLK_DIV_2_BITS-1:0] clk_div_2_counter = 0;
+  
+  // PLL
+  wire CLKFBOUT;
+  wire CLKFBIN;
 
   // LED toggle
   reg  [BITS_REQUIRED-1:0] clk_blink_counter = 0;
@@ -69,12 +74,70 @@ module fpga_wrapper (
   wire [TRCAL_SIZE-1:0] trcal_in;
   wire [TRCAL_SIZE-1:0] trcal_out;
 
+  // JTAG ILA
+  reg        ila_tck = 0;
+  reg        ila_tms = 0;
+  reg        ila_tdi = 0;
+  reg        ila_tdo = 0;
+  wire [3:0] ila_latched_jtag_ir;
+  wire       ila_extest_select;
+  wire       ila_sample_preload_select;
+  wire       ila_idcode_select;
+  wire       ila_mbist_select;
+  wire       ila_debug_select;
+  wire       ila_feedthru_select;
+  wire       ila_bypass_select;
+
 
   BUFGCE BUFGCE_clk_inst (
     .O  (clk),    // 1-bit output: Clock output
     .CE (clk_en), // 1-bit input: Clock enable input for I0
     .I  (clk_in)  // 1-bit input: Primary clock
   );
+
+  /*
+  There are some values that these need to be betweem, which varies based on MMCM/PLL.
+  D,M,O can take certain rages and steps based on MMCM/PLL
+  Fpfd = Fin/D (I think this is only for MMCM. Not completely sure.)
+  Fvco = Fin*(M/D)
+  Fout = Fvco / O
+  */
+  // Generate 20MHz clock for ILA using PLLE2
+  PLLE2_ADV #(
+    .BANDWIDTH("OPTIMIZED"),  // OPTIMIZED, HIGH, LOW
+    .CLKFBOUT_MULT(41),        // Multiply value for all CLKOUT, (2-64)
+    .CLKFBOUT_PHASE(0.0),     // Phase offset in degrees of CLKFB, (-360.000-360.000).
+    // CLKIN_PERIOD: Input clock period in nS to ps resolution (i.e. 33.333 is 30 MHz).
+    .CLKIN1_PERIOD(CLOCK_PERIOD),
+    // CLKOUT0_DIVIDE - CLKOUT5_DIVIDE: Divide amount for CLKOUT (1-128)
+    .CLKOUT0_DIVIDE(82),
+    // CLKOUT0_DUTY_CYCLE - CLKOUT5_DUTY_CYCLE: Duty cycle for CLKOUT outputs (0.001-0.999).
+    .CLKOUT0_DUTY_CYCLE(0.5),
+    // CLKOUT0_PHASE - CLKOUT5_PHASE: Phase offset for CLKOUT outputs (-360.000-360.000).
+    .CLKOUT0_PHASE(0.0),
+    .COMPENSATION("ZHOLD"),   // ZHOLD, BUF_IN, EXTERNAL, INTERNAL
+    .DIVCLK_DIVIDE(5),        // Master division value (1-56)
+    // REF_JITTER: Reference input jitter in UI (0.000-0.999).
+    .REF_JITTER1(0.0),
+    .REF_JITTER2(0.0),
+    .STARTUP_WAIT("FALSE")    // Delay DONE until PLL Locks, ("TRUE"/"FALSE")
+  ) PLLE2_ADV_inst (
+    // Clock Outputs: 1-bit (each) output: User configurable clock outputs
+    .CLKOUT0(clk_ila),   // 1-bit output: CLKOUT0
+    // Feedback Clocks: 1-bit (each) output: Clock feedback ports
+    .CLKFBOUT(CLKFBOUT), // 1-bit output: Feedback clock
+    .LOCKED(LOCKED),     // 1-bit output: LOCK
+    // Clock Inputs: 1-bit (each) input: Clock inputs
+    .CLKIN1(clk_in),     // 1-bit input: Primary clock
+    // Control Ports: 1-bit (each) input: PLL control ports
+    .CLKINSEL(1'b1), // 1-bit input: Clock select, High=CLKIN1 Low=CLKIN2
+    .PWRDWN(1'b0),     // 1-bit input: Power-down
+    .RST(1'b0),           // 1-bit input: Reset
+    // Feedback Clocks: 1-bit (each) input: Clock feedback ports
+    .CLKFBIN(CLKFBIN)    // 1-bit input: Feedback clock
+  );
+   
+  assign CLKFBIN = CLKFBOUT;
 
   // counters to generate clk_div_1 and clk_div_2
   always@ (posedge clk) begin
@@ -165,7 +228,16 @@ module fpga_wrapper (
       // TDI signals from sub-modules
       .debug_tdi_i                (tdi_debug), // from debug module
       .bs_chain_tdi_i             (tdi_boundary_scan), // from Boundary Scan Chain
-      .mbist_tdi_i                (tdi_bist) // from Mbist Chain
+      .mbist_tdi_i                (tdi_bist), // from Mbist Chain
+
+      .ila_latched_jtag_ir        (ila_latched_jtag_ir),
+      .ila_extest_select          (ila_extest_select),
+      .ila_sample_preload_select  (ila_sample_preload_select),
+      .ila_idcode_select          (ila_idcode_select),
+      .ila_mbist_select           (ila_mbist_select),
+      .ila_debug_select           (ila_debug_select),
+      .ila_feedthru_select        (ila_feedthru_select),
+      .ila_bypass_select          (ila_bypass_select)
   );
 
   always@ (posedge tck or posedge trst) begin
@@ -221,5 +293,30 @@ module fpga_wrapper (
 
   );
 
+  always@ (posedge clk_ila) begin
+    ila_tck <= tck;
+    ila_tms <= tms;
+    ila_tdi <= tdi;
+    ila_tdo <= tdo;
+  end
+  
+  // ILA to debug the JTAG interface
+  jtag_ila jtag_ila_inst (
+    .clk     (clk_ila), // input wire clk
+
+    .probe0  (ila_tck), // input wire [0:0]  probe0  
+    .probe1  (ila_tms), // input wire [0:0]  probe1 
+    .probe2  (ila_tdi), // input wire [0:0]  probe2 
+    .probe3  (ila_tdo), // input wire [0:0]  probe3 
+    .probe4  (ila_latched_jtag_ir), // input wire [3:0]  probe4 
+    .probe5  (ila_extest_select), // input wire [0:0]  probe5 
+    .probe6  (ila_sample_preload_select), // input wire [0:0]  probe6 
+    .probe7  (ila_idcode_select), // input wire [0:0]  probe7 
+    .probe8  (ila_mbist_select), // input wire [0:0]  probe8 
+    .probe9  (ila_debug_select), // input wire [0:0]  probe9 
+    .probe10 (ila_feedthru_select), // input wire [0:0]  probe10 
+    .probe11 (ila_bypass_select) // input wire [0:0]  probe11
+  );
+  
 
 endmodule
