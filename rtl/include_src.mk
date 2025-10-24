@@ -1,2 +1,2 @@
 SRC_FILES += \
-	$(BASE)/rtl/fpga_wrapper.sv \
+	$(BASE)/rtl/fpga_wrapper.sv 
